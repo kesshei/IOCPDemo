@@ -3,7 +3,7 @@ using IOCPSocket.Server;
 using System;
 using System.Text;
 
-namespace IOCPServerTest    
+namespace IOCPServerTest
 {
     class Program
     {

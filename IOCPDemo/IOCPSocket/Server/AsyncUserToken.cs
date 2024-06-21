@@ -40,6 +40,10 @@ namespace IOCPSocket.Server
         /// </summary>
         public DateTime ConnectTime { get; set; }
         /// <summary>
+        /// 数据最近接收更新时间
+        /// </summary>
+        public DateTime UpdateTime { get; set; }
+        /// <summary>
         /// 远程地址
         /// </summary>
         public EndPoint RemoteAddress { get; set; }
@@ -83,6 +87,7 @@ namespace IOCPSocket.Server
             {
                 ReceiveBuffer.Add(ReceiveEventArgs.Buffer[i]);
             }
+            this.UpdateTime = DateTime.Now;
         }
     }
 }

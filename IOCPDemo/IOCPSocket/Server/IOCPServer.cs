@@ -1,10 +1,12 @@
 ﻿using IOCPSocket.Server;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using System.Threading;
 using System.Threading.Tasks;
 
 namespace IOCPSocket
@@ -86,17 +88,21 @@ namespace IOCPSocket
         /// <summary>
         /// 客户端列表
         /// </summary>
-        public Dictionary<string, AsyncUserToken> clients;
+        public ConcurrentDictionary<string, AsyncUserToken> clients;
         /// <summary>
         /// 对象池
         /// </summary>
         private AsyncUserTokenPool _userTokenPool;
         /// <summary>
+        /// 消息超时时间 默认一分钟
+        /// </summary>
+        public int MsgTimeOut { get; set; } = 1 * 60;
+        /// <summary>
         /// 异步socket TCP服务器
         /// </summary>
         /// <param name="listenPort">监听的端口</param>
         /// <param name="maxClient">最大的客户端数量</param>
-        public IOCPServer(int listenPort, int maxClient) : this(IPAddress.Any, listenPort, maxClient)
+        public IOCPServer(int listenPort, int maxClient, int msgTimeOut = 1 * 60) : this(IPAddress.Any, listenPort, maxClient, msgTimeOut)
         { }
         /// <summary>
         /// 异步socket TCP服务器
@@ -105,11 +111,12 @@ namespace IOCPSocket
         /// <param name="listenPort">监听的端口</param>
         /// <param name="maxClient">最大的客户端数量</param>
         /// <param name="BufferSize">缓存的buffer</param>
-        public IOCPServer(IPAddress localIpaddress, int listenPort, int maxClient, int BufferSize = 1024)
+        public IOCPServer(IPAddress localIpaddress, int listenPort, int maxClient, int msgTimeOut = 1 * 60, int BufferSize = 1024)
         {
             IsRunning = true;//服务状态变成  已在运行
+            this.MsgTimeOut = msgTimeOut;
             disposed = false;
-            clients = new Dictionary<string, AsyncUserToken>();
+            clients = new ConcurrentDictionary<string, AsyncUserToken>();
             RevBufferSize = BufferSize;
             MaxConnectNumber = maxClient;
             ServerlocaPoint = new IPEndPoint(localIpaddress, listenPort);
@@ -138,6 +145,26 @@ namespace IOCPSocket
             {
                 OnStart();
             }
+            _ = Task.Factory.StartNew(() =>
+            {
+                while (IsRunning)
+                {
+                    foreach (var item in clients.Values)
+                    {
+                        if ((DateTime.Now - item.UpdateTime).TotalSeconds > MsgTimeOut)
+                        {
+                            try
+                            {
+                                CloseClientSocket(item);
+                            }
+                            catch (Exception)
+                            {
+                            }
+                        }
+                    }
+                    SpinWait.SpinUntil(() => !IsRunning, 5 * 1000);
+                }
+            }, TaskCreationOptions.LongRunning);
         }
         /// <summary>
         /// 开始接收新的异步请求
@@ -203,10 +230,11 @@ namespace IOCPSocket
                 AsyncUserToken userToken = _userTokenPool.Pop();
                 userToken.ConnectSocket = socket;
                 userToken.ConnectTime = DateTime.Now;
+                userToken.UpdateTime = DateTime.Now;
                 userToken.RemoteAddress = e.AcceptSocket.RemoteEndPoint;
                 userToken.IPAddress = ((IPEndPoint)(e.AcceptSocket.RemoteEndPoint)).Address;
                 //更新客户列表
-                lock (clients) { clients.Add(e.AcceptSocket.RemoteEndPoint.ToString(), userToken); }
+                clients.TryAdd(e.AcceptSocket.RemoteEndPoint.ToString(), userToken);
                 if (OnNewAccept != null)
                 {
                     OnNewAccept(userToken);
@@ -259,7 +287,7 @@ namespace IOCPSocket
                 OnQuit(userToken);
             }
             //移除这个客户信息
-            lock (clients) { clients.Remove(userToken.RemoteAddress.ToString()); }
+            clients.TryRemove(userToken.RemoteAddress.ToString(), out var _);
             //通知客户端要关闭连接
             try
             {
@@ -320,6 +348,7 @@ namespace IOCPSocket
         /// <param name="disposing"></param>
         private void Dispose(bool disposing)
         {
+            IsRunning = false;
             if (!this.disposed && disposed)
             {
                 _userTokenPool.Dispose();
@@ -341,9 +370,8 @@ namespace IOCPSocket
                 //关闭监听的socket
                 ListenerSocket.Close();
                 //清空客户端列表
-                lock (clients) { clients.Clear(); }
+                clients.Clear();
                 this.disposed = true;
-                IsRunning = false;
             }
         }
     }

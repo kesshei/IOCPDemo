@@ -153,6 +153,11 @@ namespace IOCPSocket
                     {
                         if (_clientSock.Available == 0)
                         {
+                            if (bufferData.Count == 0)
+                            {
+                                this.Dispose();
+                                return;
+                            }
                             this.OnReceive(bufferData.ToArray());
                             bufferData.Clear();
                         }
