@@ -7,10 +7,15 @@ using System.Threading.Tasks;
 namespace IOCPSocket.Server
 {
     /// <summary>
-    /// AsyncUserToken 对象池 （固定缓存设计）
+    /// AsyncUserToken 对象池 （固定缓存+动态缓存 设计）
+    /// 注：为了解决异常情况下，对象不够用的情况，特增加自己new的方式，以应对突发情况。
     /// </summary>
     public class AsyncUserTokenPool : IDisposable
     {
+        /// <summary>
+        /// 创建 UserToken的方式
+        /// </summary>
+        Func<AsyncUserToken> NewAsyncUserToken { get; set; }
         /// <summary>
         /// 后进先出的集合
         /// </summary>
@@ -19,9 +24,14 @@ namespace IOCPSocket.Server
         /// 构造函数
         /// </summary>
         /// <param name="capacity">设置对象池的容量</param>
-        public AsyncUserTokenPool(int capacity)
+        public AsyncUserTokenPool(int capacity, Func<AsyncUserToken> newAsyncUserToken)
         {
             m_pool = new Stack<AsyncUserToken>(capacity);
+            NewAsyncUserToken = newAsyncUserToken;
+        }
+        public AsyncUserToken New()
+        {
+            return NewAsyncUserToken();
         }
         /// <summary>
         /// 压入一个数据
@@ -45,7 +55,14 @@ namespace IOCPSocket.Server
         {
             lock (m_pool)
             {
-                return m_pool.Pop();
+                if (m_pool.Any())
+                {
+                    return m_pool.Pop();
+                }
+                else
+                {
+                    return New();
+                }
             }
         }
         /// <summary>
@@ -60,11 +77,7 @@ namespace IOCPSocket.Server
         /// </summary>
         public void Dispose()
         {
-            do
-            {
-                this.Pop();
-            }
-            while (this.Count > 0);
+            m_pool.Clear();
         }
     }
 }

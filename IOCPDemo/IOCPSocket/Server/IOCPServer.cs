@@ -121,13 +121,16 @@ namespace IOCPSocket
             MaxConnectNumber = maxClient;
             ServerlocaPoint = new IPEndPoint(localIpaddress, listenPort);
             ListenerSocket = new Socket(localIpaddress.AddressFamily, SocketType.Stream, ProtocolType.Tcp);
-            _userTokenPool = new AsyncUserTokenPool(MaxConnectNumber);
-            AsyncUserToken userToken;
+            _userTokenPool = new AsyncUserTokenPool(MaxConnectNumber, () =>
+            {
+                var userToken = new AsyncUserToken(RevBufferSize);
+                userToken.ReceiveEventArgs.Completed += new EventHandler<SocketAsyncEventArgs>(OnIOCompleted);
+                return userToken;
+            });
+
             for (int i = 0; i < MaxConnectNumber; i++)
             {
-                userToken = new AsyncUserToken(RevBufferSize);
-                userToken.ReceiveEventArgs.Completed += new EventHandler<SocketAsyncEventArgs>(OnIOCompleted);
-                _userTokenPool.Push(userToken);
+                _userTokenPool.Push(_userTokenPool.New());
             }
         }
         /// <summary>
