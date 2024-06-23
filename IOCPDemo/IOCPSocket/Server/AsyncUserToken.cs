@@ -12,7 +12,7 @@ namespace IOCPSocket.Server
     /// 用户对象
     /// 一个socket的seed和receive 分别用一个SocketAsyncEventArgs
     /// </summary>
-    public class AsyncUserToken
+    public class AsyncUserToken : IDisposable
     {
         /// <summary>
         /// 构造函数
@@ -20,6 +20,7 @@ namespace IOCPSocket.Server
         /// <param name="bufferSize">缓存的长度</param>
         public AsyncUserToken(int bufferSize)
         {
+            this.bufferSize = bufferSize;
             ConnectSocket = null;
             ReceiveEventArgs = new SocketAsyncEventArgs() { UserToken = this };
             AsyncReceiveBuffer = new byte[bufferSize];
@@ -27,6 +28,7 @@ namespace IOCPSocket.Server
             ReceiveBuffer = new List<byte>();
             temp = new Dictionary<string, object>();
         }
+        private int bufferSize { get; set; }
         /// <summary>
         /// 接收数据的SocketAsyncEventArgs
         /// </summary>
@@ -88,6 +90,27 @@ namespace IOCPSocket.Server
                 ReceiveBuffer.Add(ReceiveEventArgs.Buffer[i]);
             }
             this.UpdateTime = DateTime.Now;
+        }
+
+        public void Dispose()
+        {
+            ConnectSocket = null;
+            RemoteAddress = null;
+            IPAddress = null;
+            try
+            {
+                ReceiveEventArgs.Dispose();
+            }
+            catch (Exception)
+            {
+            }
+            ReceiveEventArgs = new SocketAsyncEventArgs() { UserToken = this };
+            ReceiveEventArgs.SetBuffer(AsyncReceiveBuffer, 0, AsyncReceiveBuffer.Length);//设置接收缓冲区
+            ReceiveBuffer.Clear();
+            temp.Clear();
+
+            ConnectTime = DateTime.MinValue;
+            UpdateTime = DateTime.MinValue;
         }
     }
 }

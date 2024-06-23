@@ -257,7 +257,7 @@ namespace IOCPSocket
         private void ProcessReceive(SocketAsyncEventArgs e)
         {
             AsyncUserToken userToken = e.UserToken as AsyncUserToken;
-            if (userToken.ReceiveEventArgs.BytesTransferred > 0 && userToken.ReceiveEventArgs.SocketError == SocketError.Success)
+            if (userToken.ConnectSocket != null && userToken.ConnectSocket.Connected && userToken.ReceiveEventArgs.BytesTransferred > 0 && userToken.ReceiveEventArgs.SocketError == SocketError.Success)
             {
                 Socket socket = userToken.ConnectSocket;
                 userToken.Receive();
@@ -285,23 +285,35 @@ namespace IOCPSocket
         /// <param name="e"></param>
         private void CloseClientSocket(AsyncUserToken userToken)
         {
-            if (OnQuit != null)
-            {
-                OnQuit(userToken);
-            }
             //移除这个客户信息
-            clients.TryRemove(userToken.RemoteAddress.ToString(), out var _);
-            //通知客户端要关闭连接
-            try
+            if (clients.TryRemove(userToken.RemoteAddress.ToString(), out var _))
             {
-                userToken.ConnectSocket.Shutdown(SocketShutdown.Send);
+                //先通知
+                if (OnQuit != null)
+                {
+                    OnQuit(userToken);
+                }
+                try
+                {
+                    userToken.ConnectSocket.Shutdown(SocketShutdown.Send);
+                }
+                catch (Exception){ }
+                //直接断开
+                try
+                {
+                    userToken.ConnectSocket.Close();//关闭客户端的socket
+                }
+                catch (Exception){}
+                try
+                {
+                    //释放对象自己的数据
+                    userToken.Dispose();
+                    //传递参数
+                    userToken.ReceiveEventArgs.Completed += new EventHandler<SocketAsyncEventArgs>(OnIOCompleted);
+                    _userTokenPool.Push(userToken);
+                }
+                catch (Exception){}
             }
-            catch (Exception) { }
-            userToken.ConnectSocket.Close();//关闭客户端的socket
-            //压入新的对象
-            userToken = new AsyncUserToken(RevBufferSize);
-            userToken.ReceiveEventArgs.Completed += new EventHandler<SocketAsyncEventArgs>(OnIOCompleted);
-            _userTokenPool.Push(userToken);
             //开始接收新的请求
             StartAccept();
         }
@@ -371,7 +383,11 @@ namespace IOCPSocket
                 }
                 catch (Exception) { }
                 //关闭监听的socket
-                ListenerSocket.Close();
+                try
+                {
+                    ListenerSocket.Close();
+                }
+                catch (Exception){}
                 //清空客户端列表
                 clients.Clear();
                 this.disposed = true;
