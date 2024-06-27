@@ -23,9 +23,9 @@ namespace IOCPServerTest
         /// 收到信息
         /// </summary>
         /// <param name="args"></param>
-        public static void server_OnReceive(AsyncUserToken args)
+        public static void server_OnReceive(AsyncUserToken args, byte[] bytes)
         {
-            string data = Encoding.UTF8.GetString(args.ReceiveBuffer.ToArray());
+            string data = Encoding.UTF8.GetString(bytes);
             Console.WriteLine("获取到的数据:" + data + "   " + DateTime.Now.ToString());
             server.Seed(args, Encoding.UTF8.GetBytes(data));
         }

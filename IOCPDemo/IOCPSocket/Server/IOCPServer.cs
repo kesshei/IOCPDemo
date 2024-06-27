@@ -45,7 +45,7 @@ namespace IOCPSocket
         /// 基于这个事件的委托
         /// </summary>
         /// <param name="UserToken"></param>
-        public delegate void ReceiveHandler(AsyncUserToken UserToken);
+        public delegate void ReceiveHandler(AsyncUserToken UserToken, byte[] bytes);
         /// <summary>
         /// 一个接收的事件
         /// </summary>
@@ -265,7 +265,11 @@ namespace IOCPSocket
                 {
                     if (OnReceive != null)
                     {
-                        OnReceive(userToken);
+                        var datas = userToken.ReceiveBuffer.ToArray();
+                        Task.Run(() =>
+                        {
+                            OnReceive(userToken, datas);
+                        });
                     }
                     userToken.ReceiveBuffer.Clear();
                 }
@@ -297,13 +301,13 @@ namespace IOCPSocket
                 {
                     userToken.ConnectSocket.Shutdown(SocketShutdown.Send);
                 }
-                catch (Exception){ }
+                catch (Exception) { }
                 //直接断开
                 try
                 {
                     userToken.ConnectSocket.Close();//关闭客户端的socket
                 }
-                catch (Exception){}
+                catch (Exception) { }
                 try
                 {
                     //释放对象自己的数据
@@ -312,7 +316,7 @@ namespace IOCPSocket
                     userToken.ReceiveEventArgs.Completed += new EventHandler<SocketAsyncEventArgs>(OnIOCompleted);
                     _userTokenPool.Push(userToken);
                 }
-                catch (Exception){}
+                catch (Exception) { }
             }
             //开始接收新的请求
             StartAccept();
@@ -387,7 +391,7 @@ namespace IOCPSocket
                 {
                     ListenerSocket.Close();
                 }
-                catch (Exception){}
+                catch (Exception) { }
                 //清空客户端列表
                 clients.Clear();
                 this.disposed = true;
