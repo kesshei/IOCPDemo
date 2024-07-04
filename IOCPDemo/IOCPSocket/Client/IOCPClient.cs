@@ -1,14 +1,16 @@
-﻿using System;
+﻿using IOCPSocket.Server;
+using System;
 using System.Collections.Generic;
 using System.Net;
 using System.Net.Sockets;
+using System.Threading.Tasks;
 
 namespace IOCPSocket
 {
     /// <summary>
     /// 一个客户端
     /// </summary>
-    public class IOCPClient : IDisposable
+    public class IOCPClient
     {
         /// <summary>
         /// 客户端socket
@@ -22,7 +24,7 @@ namespace IOCPSocket
         /// 接收的委托
         /// </summary>
         /// <param name="e"></param>
-        public delegate void ReceiveHandler(byte[] data);
+        public delegate void ReceiveHandler(AsyncUserToken UserToken, byte[] data);
         /// <summary>
         /// 接收数据的时间
         /// </summary>
@@ -30,7 +32,7 @@ namespace IOCPSocket
         /// <summary>
         /// 开始的委托
         /// </summary>
-        public delegate void StartHandler();
+        public delegate void StartHandler(AsyncUserToken UserToken);
         /// <summary>
         /// 开始的事件
         /// </summary>
@@ -38,23 +40,15 @@ namespace IOCPSocket
         /// <summary>
         /// 关闭事件的委托
         /// </summary>
-        public delegate void CloseHandler();
+        public delegate void CloseHandler(AsyncUserToken UserToken);
         /// <summary>
         /// 关闭事件
         /// </summary>
         public event CloseHandler OnClose;
         /// <summary>
-        /// 发送事件的委托
-        /// </summary>
-        public delegate void SeededHandler();
-        /// <summary>
-        /// 发送完毕后的事件
-        /// </summary>
-        public event SeededHandler OnSeeded;
-        /// <summary>
         /// 异常错误事件
         /// </summary>
-        public delegate void ErrHandler(Exception e);
+        public delegate void ErrHandler(AsyncUserToken UserToken, Exception e);
         /// <summary>
         /// 异常事件
         /// </summary>
@@ -65,6 +59,7 @@ namespace IOCPSocket
         public bool IsRuning = false;
         private byte[] buffer;
         private List<byte> bufferData;
+        private AsyncUserToken userToken;
         /// <summary>
         /// 客户端socket
         /// </summary>
@@ -83,102 +78,148 @@ namespace IOCPSocket
         /// </summary>
         public void ConnServer()
         {
-            _clientSock.BeginConnect(ServerEndPoint, new AsyncCallback(ConnectCallback), IsRuning);
-        }
-        /// <summary>
-        /// 异步连接的回调
-        /// </summary>
-        /// <param name="ar"></param>
-        private void ConnectCallback(IAsyncResult ar)
-        {
+            _clientSock.Connect(ServerEndPoint);
+            userToken = new AsyncUserToken();
+            userToken.ReceiveEventArgs.Completed += new EventHandler<SocketAsyncEventArgs>(OnIOCompleted);
+            userToken.ConnectSocket = _clientSock;
+            userToken.ConnectTime = DateTime.Now;
+            userToken.UpdateTime = DateTime.Now;
+            userToken.RemoteAddress = userToken.ConnectSocket.RemoteEndPoint;
+            userToken.IPAddress = ((IPEndPoint)(userToken.ConnectSocket.RemoteEndPoint)).Address;
+            userToken.temp["client"] = this;
             try
             {
-                _clientSock.EndConnect(ar);
                 IsRuning = true;
                 if (OnStart != null)
                 {
-                    OnStart();
+                    OnStart(userToken);
                 }
+                ProcessReceiveCore(userToken.ReceiveEventArgs);
             }
-            catch (Exception e) { IsRuning = false; if (OnErr != null) { OnErr(e); } }
+            catch (Exception e) { IsRuning = false; if (OnErr != null) { OnErr(userToken, e); } }
+        }
+        public void ReConnServer()
+        {
+            //直接断开
+            try
+            {
+                _clientSock.Close();//关闭客户端的socket
+            }
+            catch (Exception) { }
+            ConnServer();
+            Console.WriteLine("已重连");
         }
         /// <summary>
         /// 发送数据
         /// </summary>
         /// <param name="data"></param>
-        public void Seed(byte[] data)
-        {
-            _clientSock.BeginSend(data, 0, data.Length, SocketFlags.None, new AsyncCallback(SendCallback), null);
-
-        }
-        //发送数据，以防发送少了。。
-        private void SendCallback(IAsyncResult ar)
+        public int Seed(byte[] data)
         {
             try
             {
-                if (_clientSock.Connected)
+                return _clientSock.Send(data);
+            }
+            catch (Exception ex)
+            {
+                IsRuning = false;
+                if (OnErr != null)
                 {
-                    _clientSock.EndSend(ar);
-                    if (OnSeeded != null) { OnSeeded(); }
+                    OnErr(userToken, ex);
                 }
             }
-            catch (Exception e) { if (OnErr != null) { OnErr(e); } }
+            return -1;
         }
         /// <summary>
-        /// 接收
+        /// 当socket 上的发送或接收被完成时，调用此函数
         /// </summary>
-        public void Receive()
+        /// <param name="sender">激发事件的对象</param>
+        /// <param name="e">与发送或接收完成操作相关联的socketAsyncEventArg对象</param>
+        private void OnIOCompleted(object sender, SocketAsyncEventArgs e)
         {
-            if (_clientSock.Connected)
+            AsyncUserToken userToken = e.UserToken as AsyncUserToken;
+            switch (e.LastOperation)
             {
-                _clientSock.BeginReceive(buffer, 0, buffer.Length, SocketFlags.None, new AsyncCallback(ReceiveCallback), null);
+                case SocketAsyncOperation.Receive:
+                    ProcessReceive(e);
+                    break;
+                case SocketAsyncOperation.Send:
+                    // ProcessReceiveCore(e);
+                    break;
+                default:
+                    //CloseClientSocket(userToken, $"OnIOCompleted:{e.LastOperation}");
+                    break;
+            }
+        }
+        private void ProcessReceiveCore(SocketAsyncEventArgs e)
+        {
+            AsyncUserToken userToken = e.UserToken as AsyncUserToken;
+            Socket socket = userToken.ConnectSocket;
+            if (!socket.ReceiveAsync(e))
+            {
+                ProcessReceive(e);
             }
         }
         /// <summary>
-        /// 接收
+        /// 已经收到消息
         /// </summary>
-        /// <param name="ar"></param>
-        private void ReceiveCallback(IAsyncResult ar)
+        /// <param name="e"></param>
+        private void ProcessReceive(SocketAsyncEventArgs e)
         {
-            try
+            AsyncUserToken userToken = e.UserToken as AsyncUserToken;
+            Socket socket = userToken.ConnectSocket;
+            if (socket != null && socket.Connected && userToken.ReceiveEventArgs.BytesTransferred > 0 && userToken.ReceiveEventArgs.SocketError == SocketError.Success)
             {
-                if (_clientSock.Connected)
+                userToken.Receive();
+                if (socket.Available == 0)
                 {
-                    int count = _clientSock.EndReceive(ar);
-                    for (int i = 0; i < count; i++)
+                    if (OnReceive != null)
                     {
-                        bufferData.Add(buffer[i]);
-                    }
-                    if (this.OnReceive != null)
-                    {
-                        if (_clientSock.Available == 0)
+                        var datas = userToken.ReceiveBuffer.ToArray();
+                        Task.Run(() =>
                         {
-                            if (bufferData.Count == 0)
-                            {
-                                this.Dispose();
-                                return;
-                            }
-                            this.OnReceive(bufferData.ToArray());
-                            bufferData.Clear();
-                        }
+                            this.OnReceive(userToken, datas);
+                        });
                     }
-                    this.Receive();
+                    userToken.ReceiveBuffer.Clear();
                 }
+                ProcessReceiveCore(e);
             }
-            catch (Exception e) { if (OnErr != null) { OnErr(e); } }
+            else
+            {
+                CloseClientSocket(userToken, "接收状态异常");
+            }
         }
         /// <summary>
-        /// 关闭服务
+        /// 关闭已经出问题的客户端
         /// </summary>
-        public void Dispose()
+        /// <param name="e"></param>
+        private void CloseClientSocket(AsyncUserToken userToken, string msg)
         {
+            Console.WriteLine(msg);
+            try
+            {
+                userToken.ConnectSocket.Shutdown(SocketShutdown.Send);
+            }
+            catch (Exception) { }
+            //直接断开
+            try
+            {
+                userToken.ConnectSocket.Close();//关闭客户端的socket
+            }
+            catch (Exception) { }
+
             IsRuning = false;
-            _clientSock.Shutdown(SocketShutdown.Send);
-            _clientSock.Close();
+
             if (OnClose != null)
             {
-                OnClose();
+                OnClose(userToken);
             }
+            try
+            {
+                //释放对象自己的数据
+                // userToken.Dispose();
+            }
+            catch (Exception) { }
         }
     }
 }

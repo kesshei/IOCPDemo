@@ -152,20 +152,23 @@ namespace IOCPSocket
             {
                 while (IsRunning)
                 {
-                    foreach (var item in clients.Values)
-                    {
-                        if ((DateTime.Now - item.UpdateTime).TotalSeconds > MsgTimeOut)
-                        {
-                            try
-                            {
-                                CloseClientSocket(item);
-                            }
-                            catch (Exception)
-                            {
-                            }
-                        }
-                    }
-                    SpinWait.SpinUntil(() => !IsRunning, 5 * 1000);
+                    Console.WriteLine($"总数: {clients.Count} 超时 count:{clients.Values.Where(t => (DateTime.Now - t.UpdateTime).TotalSeconds > MsgTimeOut).Count()}");
+                    //foreach (var item in clients.Values)
+                    //{
+                    //    var time = (DateTime.Now - item.UpdateTime).TotalSeconds;
+                    //    if (time > MsgTimeOut)
+                    //    {
+                    //        try
+                    //        {
+                    //            Console.WriteLine();
+                    //            //CloseClientSocket(item, $"超时:{time}");
+                    //        }
+                    //        catch (Exception)
+                    //        {
+                    //        }
+                    //    }
+                    //}
+                    SpinWait.SpinUntil(() => !IsRunning, 500);
                 }
             }, TaskCreationOptions.LongRunning);
         }
@@ -209,13 +212,20 @@ namespace IOCPSocket
         private void OnIOCompleted(object sender, SocketAsyncEventArgs e)
         {
             AsyncUserToken userToken = e.UserToken as AsyncUserToken;
-            if (e.LastOperation == SocketAsyncOperation.Receive && e.SocketError == SocketError.Success)
+            switch (e.LastOperation)
             {
-                ProcessReceive(e);
-            }
-            else if (e.SocketError == SocketError.ConnectionReset)
-            {
-                CloseClientSocket(userToken);
+                //case SocketAsyncOperation.Accept:
+                //    ProcessAccept(e);
+                //    break;
+                case SocketAsyncOperation.Receive:
+                    ProcessReceive(e);
+                    break;
+                case SocketAsyncOperation.Send:
+                    // ProcessReceiveCore(e);
+                    break;
+                default:
+                    CloseClientSocket(userToken, $"OnIOCompleted:{e.LastOperation}");
+                    break;
             }
         }
         /// <summary>
@@ -229,6 +239,9 @@ namespace IOCPSocket
             {
                 //获取当前客户端连接的socket
                 Socket socket = e.AcceptSocket;
+                //socket.SendTimeout = msgTimeOut * 1000;
+                //socket.ReceiveTimeout = msgTimeOut * 1000;
+                //socket.SetSocketOption(SocketOptionLevel.Tcp, SocketOptionName.NoDelay,true);
                 //获取一个这个对象的 token
                 AsyncUserToken userToken = _userTokenPool.Pop();
                 userToken.ConnectSocket = socket;
@@ -243,10 +256,7 @@ namespace IOCPSocket
                     OnNewAccept(userToken);
                 }
                 //开始投递 接收异步请求
-                if (!socket.ReceiveAsync(userToken.ReceiveEventArgs))
-                {
-                    ProcessReceive(userToken.ReceiveEventArgs);
-                }
+                ProcessReceiveCore(userToken.ReceiveEventArgs);
                 StartAccept(e);
             }
         }
@@ -257,9 +267,14 @@ namespace IOCPSocket
         private void ProcessReceive(SocketAsyncEventArgs e)
         {
             AsyncUserToken userToken = e.UserToken as AsyncUserToken;
-            if (userToken.ConnectSocket != null && userToken.ConnectSocket.Connected && userToken.ReceiveEventArgs.BytesTransferred > 0 && userToken.ReceiveEventArgs.SocketError == SocketError.Success)
+            if (userToken.ConnectSocket == null)
             {
-                Socket socket = userToken.ConnectSocket;
+                Console.WriteLine("ProcessReceive is null");
+                return;
+            }
+            Socket socket = userToken.ConnectSocket;
+            if (socket != null && socket.Connected && userToken.ReceiveEventArgs.BytesTransferred > 0 && userToken.ReceiveEventArgs.SocketError == SocketError.Success)
+            {
                 userToken.Receive();
                 if (socket.Available == 0)
                 {
@@ -273,53 +288,69 @@ namespace IOCPSocket
                     }
                     userToken.ReceiveBuffer.Clear();
                 }
-                if (!socket.ReceiveAsync(e))
-                {
-                    ProcessReceive(e);
-                }
+                ProcessReceiveCore(e);
             }
             else
             {
-                CloseClientSocket(userToken);
+                CloseClientSocket(userToken, $"ProcessReceive 异常");
             }
         }
+        private void ProcessReceiveCore(SocketAsyncEventArgs e)
+        {
+            AsyncUserToken userToken = e.UserToken as AsyncUserToken;
+            Socket socket = userToken.ConnectSocket;
+            if (!socket.ReceiveAsync(e))
+            {
+                ProcessReceive(e);
+            }
+        }
+        private static object CloseObj = new object();
         /// <summary>
         /// 关闭已经出问题的客户端
         /// </summary>
         /// <param name="e"></param>
-        private void CloseClientSocket(AsyncUserToken userToken)
+        private void CloseClientSocket(AsyncUserToken userToken, string msg)
         {
-            //移除这个客户信息
-            if (clients.TryRemove(userToken.RemoteAddress.ToString(), out var _))
+            lock (CloseObj)
             {
-                //先通知
-                if (OnQuit != null)
+                if (userToken.ConnectSocket == null)
                 {
-                    OnQuit(userToken);
+                    Console.WriteLine(msg);
+                    return;
                 }
-                try
+                Console.WriteLine($"{userToken.RemoteAddress.ToString()} : {msg}");
+                //移除这个客户信息
+                if (clients.TryRemove(userToken.RemoteAddress.ToString(), out var _))
                 {
-                    userToken.ConnectSocket.Shutdown(SocketShutdown.Send);
+                    //先通知
+                    if (OnQuit != null)
+                    {
+                        OnQuit(userToken);
+                    }
+                    try
+                    {
+                        userToken.ConnectSocket.Shutdown(SocketShutdown.Send);
+                    }
+                    catch (Exception) { }
+                    //直接断开
+                    try
+                    {
+                        userToken.ConnectSocket.Close();//关闭客户端的socket
+                    }
+                    catch (Exception) { }
+                    try
+                    {
+                        //释放对象自己的数据
+                        userToken.Dispose();
+                        //传递参数
+                        userToken.ReceiveEventArgs.Completed += new EventHandler<SocketAsyncEventArgs>(OnIOCompleted);
+                        _userTokenPool.Push(userToken);
+                    }
+                    catch (Exception) { }
                 }
-                catch (Exception) { }
-                //直接断开
-                try
-                {
-                    userToken.ConnectSocket.Close();//关闭客户端的socket
-                }
-                catch (Exception) { }
-                try
-                {
-                    //释放对象自己的数据
-                    userToken.Dispose();
-                    //传递参数
-                    userToken.ReceiveEventArgs.Completed += new EventHandler<SocketAsyncEventArgs>(OnIOCompleted);
-                    _userTokenPool.Push(userToken);
-                }
-                catch (Exception) { }
+                //开始接收新的请求
+                StartAccept();
             }
-            //开始接收新的请求
-            StartAccept();
         }
         /// <summary>
         /// 直接发送数据
@@ -327,13 +358,14 @@ namespace IOCPSocket
         /// <param name="token"></param>
         /// <param name="message"></param>
         /// <returns></returns>
-        public void Seed(AsyncUserToken userToken, byte[] message)
+        public int Seed(AsyncUserToken userToken, byte[] message)
         {
             int num = Seed(userToken.ConnectSocket, message);
             if (OnSended != null)
             {
                 OnSended(userToken, num);
             }
+            return num;
         }
         /// <summary>
         /// 直接发送数据k

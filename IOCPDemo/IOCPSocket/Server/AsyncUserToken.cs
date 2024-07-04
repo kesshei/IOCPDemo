@@ -18,7 +18,7 @@ namespace IOCPSocket.Server
         /// 构造函数
         /// </summary>
         /// <param name="bufferSize">缓存的长度</param>
-        public AsyncUserToken(int bufferSize)
+        public AsyncUserToken(int bufferSize = 1024)
         {
             this.bufferSize = bufferSize;
             ConnectSocket = null;
@@ -85,10 +85,7 @@ namespace IOCPSocket.Server
             //    ReceiveBuffer.Clear();
             //    IsReceiveOk = false;
             //}
-            for (int i = 0; i < ReceiveEventArgs.BytesTransferred; i++)
-            {
-                ReceiveBuffer.Add(ReceiveEventArgs.Buffer[i]);
-            }
+            ReceiveBuffer.AddRange(ReceiveEventArgs.Buffer.Take(ReceiveEventArgs.BytesTransferred));
             this.UpdateTime = DateTime.Now;
         }
 

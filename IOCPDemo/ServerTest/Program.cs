@@ -2,6 +2,8 @@
 using IOCPSocket.Server;
 using System;
 using System.Text;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace IOCPServerTest
 {
@@ -11,7 +13,7 @@ namespace IOCPServerTest
         static void Main(string[] args)
         {
             Console.Title = "蓝创精英团队 IOCP Server Demo";
-            server = new IOCPServer(9999, 1000);
+            server = new IOCPServer(9999, 100000, 3);
             server.OnReceive += new IOCPServer.ReceiveHandler(server_OnReceive);
             server.OnNewAccept += new IOCPServer.newAcceptHandler(newAcceptHandler);
             server.OnQuit += new IOCPServer.newQuitHandler(newQuitHandler);
@@ -26,8 +28,9 @@ namespace IOCPServerTest
         public static void server_OnReceive(AsyncUserToken args, byte[] bytes)
         {
             string data = Encoding.UTF8.GetString(bytes);
-            Console.WriteLine("获取到的数据:" + data + "   " + DateTime.Now.ToString());
-            server.Seed(args, Encoding.UTF8.GetBytes(data));
+            var str = $"{data} {DateTime.Now.ToString()}";
+            //Console.WriteLine("获取到的数据:" + data + "   " + DateTime.Now.ToString());
+            server.Seed(args, Encoding.UTF8.GetBytes(str));
         }
         /// <summary>
         /// 新接入的用户
@@ -35,7 +38,7 @@ namespace IOCPServerTest
         /// <param name="UserToken"></param>
         public static void newAcceptHandler(AsyncUserToken UserToken)
         {
-            Console.WriteLine("一个新的用户:" + UserToken.RemoteAddress.ToString());
+            //Console.WriteLine("一个新的用户:" + UserToken.RemoteAddress.ToString());
         }
         /// <summary>
         /// 退出用户
@@ -43,15 +46,7 @@ namespace IOCPServerTest
         /// <param name="UserToken"></param>
         public static void newQuitHandler(AsyncUserToken UserToken)
         {
-            Console.WriteLine("用户:" + UserToken.RemoteAddress.ToString() + "退出连接");
-        }
-        /// <summary>
-        /// 信息发送成功!
-        /// </summary>
-        /// <param name="userToken"></param>
-        public static void SendCompletedHandler(string userToken)
-        {
-            Console.WriteLine("刚才那条消息发送成功!" + userToken);
+            //Console.WriteLine("用户:" + UserToken.RemoteAddress.ToString() + "退出连接");
         }
         /// <summary>
         /// 服务启动
